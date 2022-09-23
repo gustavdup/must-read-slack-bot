@@ -5,13 +5,17 @@ from flask import Flask
 from slackeventsapi import SlackEventAdapter
 from datetime import datetime
 from airtable import airtable
+import time
 
+os.environ["TZ"] = "TimeZone"
+time.tzset()
+
+#
+#NEED TO SEND 200 RESPONSES BACK
+#
 
 #variables
-#desired command to read in message - If this tag is added to a message, it will automatically add a blue tickmark to the message, add an entry to airtable, and track all blue tickmark clicks for the message
 tagbot = "must-read"
-
-#airtable table name - This is the table you created
 tablename = "Slack_Read_List"
 
 
@@ -20,31 +24,32 @@ app = Flask(__name__)
 
 # Bind the Events API route to your existing Flask app by passing the server
 # instance as the last param, or with `server=app`.
-#Blind Slack API webclient and Airtable ID and key - When implementing, using a settings file would be more secure.
 slack_events_adapter = SlackEventAdapter("Slack app signing secret", "/slack/events", app)
+
+#Blind Slack API webclient and Airtable
 client = slack.WebClient("Oauth Token")
 at = airtable.Airtable('Table ID', 'APIKEY')
 
 BOT_ID = client.api_call("auth.test")['user_id']
 
-#write must-read to airtable when a message event is received
+#write must-read to airtable
 @slack_events_adapter.on('message')
 def message(payload):
-    #assign values    
+    #assign values
     event = payload.get('event', {})
     channel_id = event.get('channel')
     user_id = event.get('user')
     text = event.get('text')
     messageid = event.get('ts')
     posttime = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    channelname = client.conversations_info(channel=channel_id)["channel"]["name"]    
+    channelname = client.conversations_info(channel=channel_id)["channel"]["name"]
     members = client.conversations_members(channel=channel_id)["members"]
-    
+
     getuser = client.users_info(user=user_id)
     user = getuser["user"]["profile"]["real_name"]
 
 
-    #load channel members into array and replace with real names
+    #load members into array and replace with real names
     memberidlist = []
     membernamelist = []
     entryexists = "no"
@@ -52,8 +57,8 @@ def message(payload):
     countmembers = 0
 
     for x in range(len(members)):
-        memberidlist.append(members[x])    
-    
+        memberidlist.append(members[x])
+
     for y in range(len(memberidlist)):
         temp = client.users_info(user=memberidlist[y])
         temp2 = temp["user"]["profile"]["real_name"]
@@ -64,8 +69,8 @@ def message(payload):
     #create member string
     for y2 in range(len(membernamelist)):
         memberstring = memberstring + membernamelist[y2] + '\n'
-    
-    #Scan airtable records and add new record if it does not exist and if must-read (tagbot) was added to a slack message
+
+    #Scan airtable records and add new record if not exist and must-read added to slack message
     records = at.get(tablename)["records"]
     for z in range(len(records)):
         currentid = records[z]["fields"]["Message ID"]
@@ -76,8 +81,8 @@ def message(payload):
         if tagbot in text:
             at.create(tablename, {'Message ID': messageid, 'Date Created': posttime, 'Message': text, 'Channel': channelname, 'Posted By': user, 'Last Update': posttime, 'Not Read': memberstring, 'Not Read Count': countmembers, 'Read Count': 0})
             entryexists = 'no'
-            client.reactions_add(channel=channel_id,timestamp=messageid,name='ballot_box_with_check')   
-    
+            client.reactions_add(channel=channel_id,timestamp=messageid,name='ballot_box_with_check')
+
     return 'HTTP 200 OK'
 
 
@@ -101,10 +106,10 @@ def reaction_added(event_data):
 
     #Get message text
     message = response["messages"][0]["text"]
-    
+
     #Array of all reactions on the message
     reactions = response["messages"][0]["reactions"]
-    
+
     #Array of all members in the channel
     members = client.users_list(channel=channel)
 
@@ -116,22 +121,23 @@ def reaction_added(event_data):
     notreadlist = ""
     readcount = 0
     notreadnumber = 0
+    recordid = ""
 
     if BOT_ID != userid:
 
         #Read reactions of users - check for correct reaction
         for x in range(len(reactions)):
-            if reactions[x]["name"] == 'ballot_box_with_check': 
+            if reactions[x]["name"] == 'ballot_box_with_check':
                     readids = reactions[x]["users"]
 
-        #print("People Read")    
-        
-        for y in range(len(readids)): 
+        #print("People Read")
+
+        for y in range(len(readids)):
             readlist.append(client.users_info(user=readids[y]))
             if readlist[y]["user"]["real_name"] != "Read-Tracker":
                 readstring = readstring + readlist[y]["user"]["real_name"].title() + '\n'
                 readcount = readcount + 1
-        
+
 
         #print(readstring)
 
@@ -139,24 +145,22 @@ def reaction_added(event_data):
         for z in range(len(records2)):
             currentid2 = records2[z]["fields"]["Message ID"]
             if currentid2 == messageid:
-                recordid = records2[z]["id"]                         
+                recordid = records2[z]["id"]
                 at.update(tablename,recordid, {'Read List': readstring})
                 at.update(tablename,recordid, {'Last Update': posttime})
                 at.update(tablename,recordid, {'Read Count': readcount})
 
-        for i in range(len(readlist)):
-            temp2 = at.get(tablename,recordid)
-            notreadlist = temp2["fields"]["Not Read"]
-            notreadlist = notreadlist.replace(readlist[i]["user"]["real_name"].title(),"")
-            if notreadlist != "":
-                notreadlist = notreadlist.strip()
-            at.update(tablename,recordid, {'Not Read': notreadlist})
-            if notreadlist != "":
-                notreadnumber = len(notreadlist.split('\n'))
-                at.update(tablename,recordid, {'Not Read Count': notreadnumber})
-            if notreadlist == "":
-                at.update(tablename,recordid, {'Not Read Count': 0})
-
-    
-if __name__ == "__main__":
-    app.run(debug=True)
+        if recordid != "":
+            for i in range(len(readlist)):
+                temp2 = at.get(tablename,recordid)
+                notreadlist = temp2["fields"]["Not Read"]
+                notreadlist = notreadlist.replace(readlist[i]["user"]["real_name"].title(),"")
+                if notreadlist != "":
+                    notreadlist = notreadlist.strip()
+                    notreadlist = os.linesep.join([s for s in notreadlist.splitlines() if s])
+                at.update(tablename,recordid, {'Not Read': notreadlist})
+                if notreadlist != "":
+                    notreadnumber = len(notreadlist.split('\n'))
+                    at.update(tablename,recordid, {'Not Read Count': notreadnumber})
+                if notreadlist == "":
+                    at.update(tablename,recordid, {'Not Read Count': 0})
